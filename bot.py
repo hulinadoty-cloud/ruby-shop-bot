@@ -11,7 +11,6 @@ from aiogram.fsm.state import State, StatesGroup
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -59,8 +58,7 @@ async def conditions(message: Message):
         "Условия заказа\n\n"
         "• 50% — предоплата при оформлении\n"
         "• 5–10 дней — ориентировочный срок доставки\n"
-        "• 50% — оплата после получения товара\n\n"
-        "Перед оформлением мы обязательно проверяем наличие товара."
+        "• 50% — оплата после получения товара"
     )
 
 
@@ -83,12 +81,27 @@ async def start_order(message: Message, state: FSMContext):
 
 @dp.message(Order.product)
 async def get_product(message: Message, state: FSMContext):
+
     if message.photo:
-        await state.update_data(product="Фото товара прикреплено")
+        # Сохраняем ID самого большого варианта фотографии
+        photo_id = message.photo[-1].file_id
+
+        await state.update_data(
+            product_type="photo",
+            product_photo_id=photo_id,
+            product="Фото товара"
+        )
+
     elif message.text:
-        await state.update_data(product=message.text)
+        await state.update_data(
+            product_type="text",
+            product=message.text
+        )
+
     else:
-        await message.answer("Отправьте фото товара или ссылку на пост.")
+        await message.answer(
+            "Отправьте фото товара или ссылку на пост."
+        )
         return
 
     await state.set_state(Order.color)
@@ -123,8 +136,8 @@ async def get_quantity(message: Message, state: FSMContext):
         f"Цвет: {data['color']}\n"
         f"Размер: {data['size']}\n"
         f"Количество: {data['quantity']}\n\n"
-        "Если всё верно, напишите «Да».\n"
-        "Если нужно изменить данные — напишите «Нет»."
+        "Если всё верно — напишите «Да».\n"
+        "Если нужно начать заново — напишите «Нет»."
     )
 
     await state.set_state(Order.confirm)
@@ -133,45 +146,80 @@ async def get_quantity(message: Message, state: FSMContext):
 
 @dp.message(Order.confirm)
 async def confirm_order(message: Message, state: FSMContext):
+
     answer = message.text.lower().strip()
 
     if answer == "нет":
         await state.clear()
         await message.answer(
-            "Хорошо. Нажмите «Оформить заказ», чтобы заполнить заказ заново.",
+            "Хорошо. Нажмите «Оформить заказ», чтобы начать заново.",
             reply_markup=menu
         )
         return
 
     if answer != "да":
-        await message.answer("Напишите «Да», если всё верно, или «Нет», чтобы начать заново.")
+        await message.answer(
+            "Напишите «Да», если всё верно, или «Нет», чтобы начать заново."
+        )
         return
 
     data = await state.get_data()
 
-    username = f"@{message.from_user.username}" if message.from_user.username else "не указан"
+    # Данные клиента
+    user = message.from_user
 
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "username отсутствует"
+    )
+
+    full_name = user.full_name
+
+    # Основная информация о заказе
     admin_message = (
-        "НОВЫЙ ЗАКАЗ — RUBY SHOP\n\n"
-        f"Клиент: {username}\n"
-        f"Telegram ID: {message.from_user.id}\n\n"
+        "🛍 НОВЫЙ ЗАКАЗ — RUBY SHOP\n\n"
+        "👤 КЛИЕНТ\n"
+        f"Имя: {full_name}\n"
+        f"Username: {username}\n"
+        f"Telegram ID: {user.id}\n\n"
+        "📦 ЗАКАЗ\n"
         f"Товар: {data['product']}\n"
         f"Цвет: {data['color']}\n"
         f"Размер: {data['size']}\n"
-        f"Количество: {data['quantity']}"
+        f"Количество: {data['quantity']}\n\n"
+        "💳 Условия\n"
+        "50% — предоплата\n"
+        "50% — после получения"
     )
 
+    # Отправляем информацию администратору
     await bot.send_message(
         chat_id=ADMIN_CHAT_ID,
         text=admin_message
     )
 
+    # Если клиент отправил фото — пересылаем его администратору
+    if data.get("product_type") == "photo":
+        await bot.send_photo(
+            chat_id=ADMIN_CHAT_ID,
+            photo=data["product_photo_id"],
+            caption="📸 Фото товара из заказа выше."
+        )
+
+    # Если клиент отправил ссылку/текст — отдельно отправляем его
+    elif data.get("product_type") == "text":
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"🔗 Товар / ссылка:\n{data['product']}"
+        )
+
     await state.clear()
 
     await message.answer(
         "Заказ принят.\n\n"
-        "Мы проверим наличие товара и свяжемся с вами для оформления "
-        "предоплаты 50%.\n\n"
+        "Мы проверим наличие товара и свяжемся с вами "
+        "для оформления предоплаты 50%.\n\n"
         "Спасибо, что выбираете Ruby Shop.",
         reply_markup=menu
     )
