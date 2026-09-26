@@ -5,17 +5,17 @@ import sqlite3
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message,
     CallbackQuery,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
     InlineKeyboardButton,
+    InlineKeyboardMarkup,
     InputMediaPhoto,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -27,9 +27,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 
-SHOP_CHANNEL_URL = "https://t.me/ruby_shop_dn"
 SHOP_CHANNEL = "@ruby_shop_dn"
-
+SHOP_CHANNEL_URL = "https://t.me/ruby_shop_dn"
 DB_FILE = "ruby_shop.db"
 
 logging.basicConfig(level=logging.INFO)
@@ -50,9 +49,8 @@ def db_connect():
 
 def init_db():
     connection = db_connect()
-    cursor = connection.cursor()
 
-    cursor.execute("""
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -119,14 +117,11 @@ def create_order(data):
 
 def get_order(order_id):
     connection = db_connect()
-    cursor = connection.cursor()
 
-    cursor.execute(
+    order = connection.execute(
         "SELECT * FROM orders WHERE id = ?",
         (order_id,)
-    )
-
-    order = cursor.fetchone()
+    ).fetchone()
 
     connection.close()
 
@@ -135,17 +130,17 @@ def get_order(order_id):
 
 def get_user_orders(user_id):
     connection = db_connect()
-    cursor = connection.cursor()
 
-    cursor.execute("""
+    orders = connection.execute(
+        """
         SELECT *
         FROM orders
         WHERE user_id = ?
         ORDER BY id DESC
         LIMIT 10
-    """, (user_id,))
-
-    orders = cursor.fetchall()
+        """,
+        (user_id,)
+    ).fetchall()
 
     connection.close()
 
@@ -154,13 +149,11 @@ def get_user_orders(user_id):
 
 def update_order_status(order_id, status):
     connection = db_connect()
-    cursor = connection.cursor()
 
-    cursor.execute("""
-        UPDATE orders
-        SET status = ?
-        WHERE id = ?
-    """, (status, order_id))
+    connection.execute(
+        "UPDATE orders SET status = ? WHERE id = ?",
+        (status, order_id)
+    )
 
     connection.commit()
     connection.close()
@@ -191,38 +184,34 @@ class Admin(StatesGroup):
 # ALBUM STORAGE
 # ============================================================
 
-# Здесь временно собираются фотографии альбома.
-# Ключ = media_group_id
 album_buffer = {}
-
-# Таймеры ожидания альбомов
 album_tasks = {}
 
 
 # ============================================================
-# MAIN MENU
+# KEYBOARDS
 # ============================================================
 
-def get_main_keyboard():
+def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [
                 KeyboardButton(text="🛍️ Оформить заказ"),
-                KeyboardButton(text="📦 Мои заказы")
+                KeyboardButton(text="📦 Мои заказы"),
             ],
             [
                 KeyboardButton(text="📋 Условия заказа"),
-                KeyboardButton(text="💬 Задать вопрос")
+                KeyboardButton(text="💬 Задать вопрос"),
             ],
             [
-                KeyboardButton(text="✈️ Telegram-канал")
+                KeyboardButton(text="✈️ Telegram-канал"),
             ],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
 
-def back_menu_keyboard():
+def back_keyboard():
     builder = InlineKeyboardBuilder()
 
     builder.button(
@@ -247,27 +236,18 @@ phone_keyboard = ReplyKeyboardMarkup(
             )
         ],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 
 def progress(step):
-    symbols = []
-
-    for i in range(5):
-        if i < step:
-            symbols.append("●")
-        else:
-            symbols.append("○")
-
-    return " ━ ".join(symbols)
+    return " ━ ".join(
+        "●" if i < step else "○"
+        for i in range(5)
+    )
 
 
-# ============================================================
-# ADMIN PANEL
-# ============================================================
-
-def get_admin_keyboard():
+def admin_keyboard():
     builder = InlineKeyboardBuilder()
 
     builder.button(
@@ -285,8 +265,52 @@ def get_admin_keyboard():
     return builder.as_markup()
 
 
+async def order_button():
+    me = await bot.get_me()
+
+    if not me.username:
+        raise RuntimeError(
+            "У бота не установлен username."
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛍️ Заказать",
+                    url=f"https://t.me/{me.username}"
+                )
+            ]
+        ]
+    )
+
+
+# ============================================================
+# START
+# ============================================================
+
+@dp.message(CommandStart())
+async def start(
+    message: Message,
+    state: FSMContext
+):
+    await state.clear()
+
+    await message.answer(
+        "RUBY SHOP\n\n"
+        "Здравствуйте. Добро пожаловать в Ruby Shop.\n\n"
+        "Онлайн-магазин одежды • Донецк\n\n"
+        "Выберите действие ниже.",
+        reply_markup=main_keyboard()
+    )
+
+
+# ============================================================
+# ADMIN PANEL
+# ============================================================
+
 @dp.message(Command("channel"))
-async def admin_channel(
+async def channel_admin(
     message: Message,
     state: FSMContext
 ):
@@ -298,14 +322,12 @@ async def admin_channel(
 
     await message.answer(
         "🔐 УПРАВЛЕНИЕ RUBY SHOP\n\n"
-        "Здесь ты можешь публиковать товары "
-        "в Telegram-канал.\n\n"
-        "📤 Опубликовать товар\n"
-        "Отправь альбом из 2–10 фотографий "
-        "с описанием. Бот соберёт фотографии "
-        "в один альбом и добавит кнопку "
-        "«🛍️ Заказать».",
-        reply_markup=get_admin_keyboard()
+        "📤 Опубликовать товар\n\n"
+        "Нажми кнопку и отправь альбом "
+        "из 2–10 фотографий.\n\n"
+        "Описание товара добавь в подпись "
+        "к первой фотографии.",
+        reply_markup=admin_keyboard()
     )
 
 
@@ -329,15 +351,11 @@ async def admin_close(
 
     await callback.message.answer(
         "🔐 Управление каналом закрыто.",
-        reply_markup=get_main_keyboard()
+        reply_markup=main_keyboard()
     )
 
     await callback.answer()
 
-
-# ============================================================
-# ADMIN — PUBLISH
-# ============================================================
 
 @dp.callback_query(F.data == "admin_publish")
 async def admin_publish(
@@ -356,83 +374,33 @@ async def admin_publish(
 
     await callback.message.answer(
         "📤 ПУБЛИКАЦИЯ ТОВАРА\n\n"
-        "Отправь сюда альбом из фотографий.\n\n"
-        "Можно от 2 до 10 фотографий.\n\n"
-        "В подписи к первой фотографии "
-        "напиши описание товара, например:\n\n"
+        "Отправь сюда ОДИН альбом "
+        "из 2–10 фотографий.\n\n"
+        "Описание товара напиши в подписи "
+        "к первой фотографии.\n\n"
+        "Например:\n\n"
         "NIKE TECH FLEECE\n"
         "Размеры: S–XL\n"
         "Цвет: Black\n"
         "Качество: Premium\n\n"
-        "Бот соберёт фотографии в один альбом "
-        "и добавит кнопку:\n\n"
-        "🛍️ Заказать",
-        reply_markup=back_menu_keyboard()
+        "После этого бот создаст новый альбом "
+        "в канале и добавит кнопку "
+        "«🛍️ Заказать».",
+        reply_markup=back_keyboard()
     )
 
     await callback.answer()
 
 
 # ============================================================
-# ALBUM RECEIVING
+# ALBUM PUBLISH
 # ============================================================
 
-@dp.message(
-    Admin.waiting_new_album,
-    F.media_group_id
-)
-async def receive_album_photo(
-    message: Message,
-    state: FSMContext
-):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-
-    if not message.photo:
-        return
-
-    media_group_id = message.media_group_id
-
-    if media_group_id not in album_buffer:
-        album_buffer[media_group_id] = {
-            "photos": [],
-            "caption": None,
-            "chat_id": message.chat.id,
-        }
-
-    album_buffer[media_group_id]["photos"].append(
-        message.photo[-1].file_id
-    )
-
-    # Берём caption с той фотографии,
-    # где он присутствует.
-    if message.caption:
-        album_buffer[media_group_id]["caption"] = (
-            message.caption
-        )
-
-    # Отменяем старый таймер.
-    old_task = album_tasks.get(media_group_id)
-
-    if old_task:
-        old_task.cancel()
-
-    # Ждём ещё немного, чтобы Telegram успел
-    # прислать остальные фотографии альбома.
-    album_tasks[media_group_id] = asyncio.create_task(
-        finish_album_after_delay(
-            media_group_id,
-            state
-        )
-    )
-
-
-async def finish_album_after_delay(
+async def publish_album(
     media_group_id,
     state: FSMContext
 ):
     try:
-        # Даём Telegram время прислать весь альбом.
         await asyncio.sleep(1.5)
 
         album = album_buffer.get(media_group_id)
@@ -443,106 +411,61 @@ async def finish_album_after_delay(
         photos = album["photos"]
         caption = album["caption"]
 
-        # Telegram поддерживает максимум 10 элементов
-        # в одной медиагруппе.
-        photos = photos[:10]
-
-        if len(photos) < 2:
-            # Если вдруг пришла только одна фотография,
-            # ждём ещё немного.
-            await asyncio.sleep(1)
-
-            album = album_buffer.get(media_group_id)
-
-            if not album:
-                return
-
-            photos = album["photos"][:10]
-            caption = album["caption"]
-
         if len(photos) < 2:
             await bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=(
-                    "⚠️ Я получил только одну фотографию.\n\n"
-                    "Для публикации товара отправь "
-                    "альбом минимум из 2 фотографий."
-                )
+                ADMIN_CHAT_ID,
+                "⚠️ Получено меньше 2 фотографий.\n\n"
+                "Отправь товар одним альбомом "
+                "из 2–10 фотографий."
             )
-
-            album_buffer.pop(media_group_id, None)
-            album_tasks.pop(media_group_id, None)
 
             return
 
-        # ----------------------------------------------------
-        # Создаём медиагруппу
-        # ----------------------------------------------------
+        photos = photos[:10]
 
         media = []
 
-        for index, photo_id in enumerate(photos):
+        for index, file_id in enumerate(photos):
 
-            # Подпись ставим только на первую фотографию.
             if index == 0 and caption:
-
                 media.append(
                     InputMediaPhoto(
-                        media=photo_id,
-                        caption=caption
+                        media=file_id,
+                        caption=caption[:1024]
                     )
                 )
-
             else:
-
                 media.append(
                     InputMediaPhoto(
-                        media=photo_id
+                        media=file_id
                     )
                 )
-
-        # ----------------------------------------------------
-        # Публикуем альбом в канал
-        # ----------------------------------------------------
 
         sent_messages = await bot.send_media_group(
             chat_id=SHOP_CHANNEL,
             media=media
         )
 
-        # ----------------------------------------------------
-        # Добавляем кнопку к последнему сообщению альбома
-        # ----------------------------------------------------
-
-        keyboard = await get_order_button()
-
-        last_message = sent_messages[-1]
-
+        # Кнопка добавляется к последнему сообщению
+        # созданного альбома.
         await bot.edit_message_reply_markup(
             chat_id=SHOP_CHANNEL,
-            message_id=last_message.message_id,
-            reply_markup=keyboard
+            message_id=sent_messages[-1].message_id,
+            reply_markup=await order_button()
         )
 
         await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=(
-                "✅ ТОВАР ОПУБЛИКОВАН\n\n"
-                f"📸 Фотографий: {len(photos)}\n\n"
-                "📢 Альбом опубликован в канале.\n\n"
-                "🛍️ Кнопка «Заказать» добавлена."
-            ),
-            reply_markup=get_main_keyboard()
+            ADMIN_CHAT_ID,
+            "✅ ТОВАР ОПУБЛИКОВАН\n\n"
+            f"📸 Фотографий: {len(photos)}\n\n"
+            f"📢 Альбом опубликован в {SHOP_CHANNEL}.\n\n"
+            "🛍️ Кнопка «Заказать» добавлена.",
+            reply_markup=main_keyboard()
         )
 
         await state.clear()
 
-        # Очищаем временные данные.
-        album_buffer.pop(media_group_id, None)
-        album_tasks.pop(media_group_id, None)
-
     except asyncio.CancelledError:
-        # Таймер был перезапущен — это нормально.
         return
 
     except Exception as error:
@@ -551,25 +474,75 @@ async def finish_album_after_delay(
         )
 
         await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=(
-                "❌ Не удалось опубликовать альбом.\n\n"
-                "Проверь, что бот является администратором "
-                "канала и имеет право публиковать сообщения.\n\n"
-                f"Техническая ошибка:\n{error}"
-            )
+            ADMIN_CHAT_ID,
+            "❌ Не удалось опубликовать альбом.\n\n"
+            "Проверь, что бот является администратором "
+            "канала и имеет право публиковать сообщения.\n\n"
+            f"Ошибка:\n{error}"
         )
 
-        album_buffer.pop(media_group_id, None)
-        album_tasks.pop(media_group_id, None)
+    finally:
+        album_buffer.pop(
+            media_group_id,
+            None
+        )
+
+        album_tasks.pop(
+            media_group_id,
+            None
+        )
 
 
 # ============================================================
-# FALLBACK FOR NON-ALBUM ADMIN MESSAGE
+# RECEIVE ALBUM
 # ============================================================
+
+@dp.message(
+    Admin.waiting_new_album,
+    F.media_group_id
+)
+async def receive_album(
+    message: Message,
+    state: FSMContext
+):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    if not message.photo:
+        return
+
+    group_id = message.media_group_id
+
+    album = album_buffer.setdefault(
+        group_id,
+        {
+            "photos": [],
+            "caption": None
+        }
+    )
+
+    album["photos"].append(
+        message.photo[-1].file_id
+    )
+
+    if message.caption:
+        album["caption"] = message.caption
+
+    old_task = album_tasks.get(group_id)
+
+    if old_task:
+        old_task.cancel()
+
+    album_tasks[group_id] = asyncio.create_task(
+        publish_album(
+            group_id,
+            state
+        )
+    )
+
 
 @dp.message(Admin.waiting_new_album)
-async def admin_waiting_album_other(
+async def admin_album_fallback(
     message: Message,
     state: FSMContext
 ):
@@ -577,73 +550,21 @@ async def admin_waiting_album_other(
         return
 
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
             "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard()
         )
 
         return
 
     await message.answer(
-        "⚠️ Отправь именно альбом из фотографий.\n\n"
-        "От 2 до 10 фотографий одним сообщением "
-        "Telegram.\n\n"
-        "Текст товара добавь в подпись "
+        "⚠️ Отправь именно альбом "
+        "из 2–10 фотографий.\n\n"
+        "Описание товара добавь в подпись "
         "к первой фотографии.",
-        reply_markup=back_menu_keyboard()
-    )
-
-
-# ============================================================
-# ORDER BUTTON
-# ============================================================
-
-async def get_order_button():
-    me = await bot.get_me()
-
-    if not me.username:
-        raise RuntimeError(
-            "У бота не установлен username."
-        )
-
-    bot_link = f"https://t.me/{me.username}"
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🛍️ Заказать",
-                    url=bot_link
-                )
-            ]
-        ]
-    )
-
-
-# ============================================================
-# START
-# ============================================================
-
-@dp.message(CommandStart())
-async def start(
-    message: Message,
-    state: FSMContext
-):
-    await state.clear()
-
-    text = (
-        "RUBY SHOP\n\n"
-        "Здравствуйте. Добро пожаловать в Ruby Shop.\n\n"
-        "Онлайн-магазин одежды • Донецк\n\n"
-        "Выберите действие ниже."
-    )
-
-    await message.answer(
-        text,
-        reply_markup=get_main_keyboard()
+        reply_markup=back_keyboard()
     )
 
 
@@ -653,34 +574,24 @@ async def start(
 
 @dp.message(F.text == "📋 Условия заказа")
 async def conditions(message: Message):
-
-    text = (
+    await message.answer(
         "📋 УСЛОВИЯ ЗАКАЗА\n\n"
         "🛍️ Выбор товара\n"
-        "Выбираете понравившийся товар и оформляете заказ "
+        "Выбираете товар и оформляете заказ "
         "прямо в боте Ruby Shop.\n\n"
         "🔗 Ссылка на товар\n"
-        "При оформлении заказа можно переслать сообщение "
-        "с товаром из нашего Telegram-канала или отправить "
-        "ссылку на конкретный товар.\n\n"
+        "Можно переслать сообщение с товаром "
+        "из нашего Telegram-канала или отправить ссылку.\n\n"
         "💳 Предоплата\n"
-        "Для подтверждения заказа вносится предоплата — "
-        "50% от стоимости товара.\n\n"
+        "Для подтверждения заказа вносится "
+        "предоплата — 50%.\n\n"
         "📦 Доставка\n"
-        "Товар поступает к нам в Донецк в течение 5–10 дней.\n"
-        "Срок является ориентировочным и может немного изменяться.\n\n"
-        "🤍 Получение товара\n"
-        "После поступления товара в Донецк вы получаете заказ "
-        "и оплачиваете оставшиеся 50% стоимости.\n\n"
-        "Весь процесс — от выбора товара до получения заказа — "
-        "проходит через Ruby Shop.\n\n"
-        "С любовью, Ruby Shop 💋\n"
-        "Онлайн-магазин • Донецк"
-    )
-
-    await message.answer(
-        text,
-        reply_markup=get_main_keyboard()
+        "Ориентировочно 5–10 дней.\n\n"
+        "🤍 Получение\n"
+        "После поступления товара в Донецк "
+        "оплачиваются оставшиеся 50%.\n\n"
+        "С любовью, Ruby Shop 💋",
+        reply_markup=main_keyboard()
     )
 
 
@@ -689,8 +600,7 @@ async def conditions(message: Message):
 # ============================================================
 
 @dp.message(F.text == "✈️ Telegram-канал")
-async def telegram_channel(message: Message):
-
+async def channel(message: Message):
     builder = InlineKeyboardBuilder()
 
     builder.button(
@@ -700,14 +610,14 @@ async def telegram_channel(message: Message):
 
     await message.answer(
         "✈️ TELEGRAM-КАНАЛ RUBY SHOP\n\n"
-        "Здесь можно посмотреть актуальный ассортимент, "
-        "новинки и новые дропы.",
+        "Актуальный ассортимент, новинки "
+        "и новые дропы.",
         reply_markup=builder.as_markup()
     )
 
 
 # ============================================================
-# ORDER START
+# ORDER
 # ============================================================
 
 @dp.message(F.text == "🛍️ Оформить заказ")
@@ -716,7 +626,6 @@ async def start_order(
     state: FSMContext
 ):
     await state.clear()
-
     await state.set_state(Order.product)
 
     await message.answer(
@@ -724,15 +633,11 @@ async def start_order(
         f"{progress(1)}\n\n"
         "Шаг 1 из 5\n\n"
         "👕 Отправьте товар, который хотите заказать.\n\n"
-        "Можно переслать сообщение с товаром из "
-        "нашего Telegram-канала или отправить ссылку.",
-        reply_markup=back_menu_keyboard()
+        "Можно переслать сообщение с товаром "
+        "из нашего канала или отправить ссылку.",
+        reply_markup=back_keyboard()
     )
 
-
-# ============================================================
-# ORDER PRODUCT
-# ============================================================
 
 @dp.message(Order.product)
 async def get_product(
@@ -740,12 +645,11 @@ async def get_product(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
             "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard()
         )
 
         return
@@ -761,22 +665,23 @@ async def get_product(
         if message.caption:
             product_text = message.caption.strip()
 
-        if message.forward_origin:
+        try:
+            if (
+                message.forward_origin
+                and getattr(
+                    message.forward_origin.chat,
+                    "username",
+                    None
+                )
+            ):
+                product_link = (
+                    "https://t.me/"
+                    f"{message.forward_origin.chat.username}/"
+                    f"{message.forward_origin.message_id}"
+                )
 
-            try:
-                origin = message.forward_origin
-                chat = origin.chat
-                message_id = origin.message_id
-
-                if getattr(chat, "username", None):
-                    product_link = (
-                        f"https://t.me/"
-                        f"{chat.username}/"
-                        f"{message_id}"
-                    )
-
-            except Exception:
-                pass
+        except Exception:
+            pass
 
     elif message.text:
 
@@ -791,9 +696,9 @@ async def get_product(
     else:
 
         await message.answer(
-            "Пожалуйста, пересылайте пост с товаром "
-            "из нашего Telegram-канала или отправьте ссылку.",
-            reply_markup=back_menu_keyboard()
+            "Пожалуйста, перешлите товар "
+            "или отправьте ссылку.",
+            reply_markup=back_keyboard()
         )
 
         return
@@ -811,13 +716,9 @@ async def get_product(
         f"{progress(2)}\n\n"
         "Шаг 2 из 5\n\n"
         "Укажите цвет товара.",
-        reply_markup=back_menu_keyboard()
+        reply_markup=back_keyboard()
     )
 
-
-# ============================================================
-# COLOR
-# ============================================================
 
 @dp.message(Order.color)
 async def get_color(
@@ -825,12 +726,11 @@ async def get_color(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
             "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard()
         )
 
         return
@@ -846,13 +746,9 @@ async def get_color(
         f"{progress(3)}\n\n"
         "Шаг 3 из 5\n\n"
         "Укажите размер товара.",
-        reply_markup=back_menu_keyboard()
+        reply_markup=back_keyboard()
     )
 
-
-# ============================================================
-# SIZE
-# ============================================================
 
 @dp.message(Order.size)
 async def get_size(
@@ -860,12 +756,11 @@ async def get_size(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
             "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard()
         )
 
         return
@@ -881,13 +776,9 @@ async def get_size(
         f"{progress(4)}\n\n"
         "Шаг 4 из 5\n\n"
         "Укажите количество товара.",
-        reply_markup=back_menu_keyboard()
+        reply_markup=back_keyboard()
     )
 
-
-# ============================================================
-# QUANTITY
-# ============================================================
 
 @dp.message(Order.quantity)
 async def get_quantity(
@@ -895,12 +786,11 @@ async def get_quantity(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
             "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard()
         )
 
         return
@@ -908,11 +798,10 @@ async def get_quantity(
     quantity = message.text.strip()
 
     if not quantity.isdigit() or int(quantity) <= 0:
-
         await message.answer(
             "⚠️ Укажите количество цифрами.\n\n"
             "Например: 1 или 2.",
-            reply_markup=back_menu_keyboard()
+            reply_markup=back_keyboard()
         )
 
         return
@@ -938,8 +827,8 @@ async def get_quantity(
         "📱 КОНТАКТНЫЕ ДАННЫЕ\n\n"
         f"{progress(5)}\n\n"
         "Шаг 5 из 5\n\n"
-        "При желании отправьте номер телефона для связи "
-        "по заказу или продолжите без него.",
+        "При желании отправьте номер телефона "
+        "или продолжите без него.",
         reply_markup=phone_keyboard
     )
 
@@ -982,7 +871,7 @@ async def skip_phone(
 
 
 # ============================================================
-# SUMMARY
+# ORDER SUMMARY
 # ============================================================
 
 async def show_summary(
@@ -1002,9 +891,12 @@ async def show_summary(
         f"👕 Товар\n{product_text}\n\n"
         f"🎨 Цвет\n{data.get('color')}\n\n"
         f"📏 Размер\n{data.get('size')}\n\n"
-        f"📦 Количество\n{data.get('quantity')} шт.\n\n"
-        f"📱 Telegram\n{data.get('telegram_username')}\n\n"
-        f"☎️ Телефон\n{data.get('phone')}\n\n"
+        f"📦 Количество\n"
+        f"{data.get('quantity')} шт.\n\n"
+        f"📱 Telegram\n"
+        f"{data.get('telegram_username')}\n\n"
+        f"☎️ Телефон\n"
+        f"{data.get('phone')}\n\n"
         "━━━━━━━━━━━━━━\n\n"
         "💳 Оплата\n"
         "50% — предоплата\n"
@@ -1037,7 +929,7 @@ async def show_summary(
 
 
 # ============================================================
-# BACK
+# BACK TO MENU
 # ============================================================
 
 @dp.callback_query(F.data == "back_to_menu")
@@ -1049,7 +941,7 @@ async def back_to_menu(
 
     await callback.message.answer(
         "🏠 Главное меню",
-        reply_markup=get_main_keyboard()
+        reply_markup=main_keyboard()
     )
 
     await callback.answer()
@@ -1133,7 +1025,7 @@ async def confirm_order(
                     callback_data=(
                         f"status_donetsk:{order_id}"
                     )
-                ]
+                ],
             ],
             [
                 InlineKeyboardButton(
@@ -1155,16 +1047,13 @@ async def confirm_order(
     )
 
     if product_photo:
-
         await bot.send_photo(
             chat_id=ADMIN_CHAT_ID,
             photo=product_photo,
             caption=admin_text,
             reply_markup=status_keyboard
         )
-
     else:
-
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=admin_text,
@@ -1180,14 +1069,12 @@ async def confirm_order(
         f"Ваш заказ №{order_id} принят.\n\n"
         "🟡 Статус\n"
         "Ожидает подтверждения\n\n"
-        "Мы проверим наличие товара и свяжемся "
-        "с вами для дальнейшего оформления.\n\n"
-        "Спасибо, что выбрали Ruby Shop.",
-        reply_markup=get_main_keyboard()
+        "Мы проверим наличие товара "
+        "и свяжемся с вами.",
+        reply_markup=main_keyboard()
     )
 
     await state.clear()
-
     await callback.answer()
 
 
@@ -1213,7 +1100,7 @@ async def cancel_order(
         "❌ Заказ отменён.\n\n"
         "Если захотите оформить его снова, "
         "нажмите «🛍️ Оформить заказ».",
-        reply_markup=get_main_keyboard()
+        reply_markup=main_keyboard()
     )
 
     await callback.answer()
@@ -1225,19 +1112,16 @@ async def cancel_order(
 
 @dp.message(F.text == "📦 Мои заказы")
 async def my_orders(message: Message):
-
     orders = get_user_orders(
         message.from_user.id
     )
 
     if not orders:
-
         await message.answer(
             "📦 МОИ ЗАКАЗЫ\n\n"
             "У вас пока нет оформленных заказов.",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard()
         )
-
         return
 
     text = "📦 МОИ ЗАКАЗЫ\n\n"
@@ -1263,40 +1147,35 @@ async def my_orders(message: Message):
 
     await message.answer(
         text,
-        reply_markup=get_main_keyboard()
+        reply_markup=main_keyboard()
     )
 
 
 # ============================================================
-# STATUS CHANGE
+# STATUS CHANGES
 # ============================================================
 
 async def change_status(
-    callback: CallbackQuery,
-    order_id: int,
-    status: str,
-    client_status: str,
-    message_text: str
+    callback,
+    order_id,
+    status,
+    client_status,
+    message_text
 ):
-
     if callback.from_user.id != ADMIN_CHAT_ID:
-
         await callback.answer(
             "Недостаточно прав.",
             show_alert=True
         )
-
         return
 
     order = get_order(order_id)
 
     if not order:
-
         await callback.answer(
             "Заказ не найден.",
             show_alert=True
         )
-
         return
 
     update_order_status(
@@ -1305,7 +1184,6 @@ async def change_status(
     )
 
     try:
-
         await bot.send_message(
             chat_id=order["user_id"],
             text=(
@@ -1317,9 +1195,9 @@ async def change_status(
         )
 
     except Exception as error:
-
         logging.error(
-            f"Не удалось уведомить клиента: {error}"
+            "Не удалось уведомить клиента: %s",
+            error
         )
 
     await callback.answer(
@@ -1440,7 +1318,7 @@ async def ask_question(
         "💬 ВОПРОС\n\n"
         "Напишите ваш вопрос одним сообщением.\n\n"
         "Мы передадим его менеджеру Ruby Shop.",
-        reply_markup=get_main_keyboard()
+        reply_markup=main_keyboard()
     )
 
 
@@ -1450,12 +1328,11 @@ async def receive_question(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
             "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard()
         )
 
         return
@@ -1468,7 +1345,8 @@ async def receive_question(
         else "username не установлен"
     )
 
-    question_text = (
+    await bot.send_message(
+        ADMIN_CHAT_ID,
         "💬 НОВЫЙ ВОПРОС — RUBY SHOP\n\n"
         f"Имя: {user.full_name}\n"
         f"Telegram: {username}\n"
@@ -1476,15 +1354,10 @@ async def receive_question(
         f"Вопрос:\n{message.text}"
     )
 
-    await bot.send_message(
-        chat_id=ADMIN_CHAT_ID,
-        text=question_text
-    )
-
     await message.answer(
         "✅ Вопрос отправлен.\n\n"
         "Мы свяжемся с вами, как только сможем.",
-        reply_markup=get_main_keyboard()
+        reply_markup=main_keyboard()
     )
 
     await state.clear()
@@ -1495,7 +1368,6 @@ async def receive_question(
 # ============================================================
 
 async def main():
-
     init_db()
 
     logging.info(
