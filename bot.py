@@ -1,19 +1,28 @@
-import os
 import asyncio
+import logging
+import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardRemove,
 )
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+
+# =========================
+# НАСТРОЙКИ
+# =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
+
+logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -40,18 +49,18 @@ class Question(StatesGroup):
 # ГЛАВНОЕ МЕНЮ
 # =========================
 
-menu = ReplyKeyboardMarkup(
+main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Оформить заказ")],
         [KeyboardButton(text="Условия заказа")],
-        [KeyboardButton(text="Задать вопрос")]
+        [KeyboardButton(text="Задать вопрос")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 
 # =========================
-# КНОПКА ТЕЛЕФОНА
+# ТЕЛЕФОН
 # =========================
 
 phone_keyboard = ReplyKeyboardMarkup(
@@ -61,20 +70,24 @@ phone_keyboard = ReplyKeyboardMarkup(
                 text="Отправить номер телефона",
                 request_contact=True
             )
-        ]
+        ],
+        [
+            KeyboardButton(text="Не отправлять номер телефона")
+        ],
     ],
     resize_keyboard=True,
-    one_time_keyboard=True
 )
 
 
 # =========================
-# СТАРТ
+# START
 # =========================
 
 @dp.message(CommandStart())
-async def start(message: Message):
-    await message.answer(
+async def start(message: Message, state: FSMContext):
+    await state.clear()
+
+    text = (
         "RUBY SHOP\n\n"
         "Здравствуйте. Добро пожаловать в Ruby Shop.\n\n"
         "Чтобы оформить заказ, нажмите «Оформить заказ».\n"
@@ -85,8 +98,12 @@ async def start(message: Message):
         "• 50% — оплата после получения товара\n\n"
         "По любым вопросам — напишите нам.\n\n"
         "Ruby Shop\n"
-        "Онлайн-магазин одежды · Донецк",
-        reply_markup=menu
+        "Онлайн-магазин • Донецк"
+    )
+
+    await message.answer(
+        text,
+        reply_markup=main_keyboard
     )
 
 
@@ -96,109 +113,36 @@ async def start(message: Message):
 
 @dp.message(F.text == "Условия заказа")
 async def conditions(message: Message):
-    await message.answer(
-        "Условия заказа\n\n"
-        "• 50% — предоплата при оформлении\n"
-        "• 5–10 дней — ориентировочный срок доставки\n"
-        "• 50% — оплата после получения товара"
+
+    text = (
+        "🛍️ Выбор товара\n"
+        "Выбираете понравившийся товар и оформляете заказ прямо в боте Ruby Shop. "
+        "Бот последовательно запросит необходимые данные и сформирует ваш заказ.\n\n"
+
+        "🔗 Ссылка на товар\n"
+        "При оформлении заказа отправьте ссылку на конкретный товар "
+        "из Telegram-канала Ruby Shop. Это поможет нам быстро найти нужную модель "
+        "и избежать ошибок при оформлении заказа.\n\n"
+
+        "💳 Предоплата\n"
+        "Для подтверждения заказа вносится предоплата — 50% от стоимости товара. "
+        "После подтверждения мы запускаем заказ в работу.\n\n"
+
+        "📦 Доставка\n"
+        "Товар поступает к нам в Донецк в течение 5–10 дней.\n"
+        "Срок является ориентировочным и может немного изменяться.\n\n"
+
+        "🤍 Получение товара\n"
+        "После поступления товара в Донецк вы получаете заказ и оплачиваете "
+        "оставшиеся 50% стоимости.\n\n"
+
+        "Весь процесс — от выбора товара до получения заказа — проходит через Ruby Shop.\n\n"
+
+        "С любовью, Ruby Shop 💋\n"
+        "Онлайн-магазин • Донецк"
     )
 
-
-# =========================
-# ВОПРОСЫ
-# =========================
-
-@dp.message(F.text == "Задать вопрос")
-async def question_start(message: Message, state: FSMContext):
-    await state.set_state(Question.waiting)
-
-    await message.answer(
-        "Напишите ваш вопрос следующим сообщением.",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="Отмена")]
-            ],
-            resize_keyboard=True
-        )
-    )
-
-
-@dp.message(Question.waiting)
-async def receive_question(message: Message, state: FSMContext):
-
-    if message.text and message.text.lower() == "отмена":
-        await state.clear()
-
-        await message.answer(
-            "Хорошо.",
-            reply_markup=menu
-        )
-        return
-
-    user = message.from_user
-
-    username = (
-        f"@{user.username}"
-        if user.username
-        else "username не установлен"
-    )
-
-    admin_message = (
-        "❓ НОВЫЙ ВОПРОС — RUBY SHOP\n\n"
-        "КЛИЕНТ\n"
-        f"Имя: {user.full_name}\n"
-        f"Username: {username}\n"
-        f"Telegram ID: {user.id}\n\n"
-        "ВОПРОС\n"
-    )
-
-    if message.text:
-
-        admin_message += message.text
-
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_message
-        )
-
-    elif message.photo:
-
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_message + "Клиент отправил фотографию."
-        )
-
-        await bot.send_photo(
-            chat_id=ADMIN_CHAT_ID,
-            photo=message.photo[-1].file_id
-        )
-
-    elif message.video:
-
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_message + "Клиент отправил видео."
-        )
-
-        await bot.send_video(
-            chat_id=ADMIN_CHAT_ID,
-            video=message.video.file_id
-        )
-
-    else:
-
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_message + "Клиент отправил сообщение."
-        )
-
-    await state.clear()
-
-    await message.answer(
-        "Ваш вопрос отправлен.\n"
-        "Мы свяжемся с вами, как только сможем.",
-        reply_markup=menu
-    )
+    await message.answer(text)
 
 
 # =========================
@@ -208,11 +152,14 @@ async def receive_question(message: Message, state: FSMContext):
 @dp.message(F.text == "Оформить заказ")
 async def start_order(message: Message, state: FSMContext):
 
+    await state.clear()
     await state.set_state(Order.product)
 
     await message.answer(
-        "Оформление заказа\n\n"
-        "Отправьте фото товара или ссылку на пост с товаром."
+        "🛍️ Отправьте товар, который хотите заказать.\n\n"
+        "Можно переслать сообщение с товаром из нашего Telegram-канала "
+        "или отправить ссылку на товар.",
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
@@ -223,34 +170,71 @@ async def start_order(message: Message, state: FSMContext):
 @dp.message(Order.product)
 async def get_product(message: Message, state: FSMContext):
 
+    product_photo = None
+    product_text = None
+    product_link = None
+
+    # ---------------------------------
+    # Если клиент переслал пост
+    # Фото + текст под фотографией
+    # ---------------------------------
+
     if message.photo:
 
-        photo_id = message.photo[-1].file_id
+        product_photo = message.photo[-1].file_id
 
-        await state.update_data(
-            product_type="photo",
-            product_photo_id=photo_id,
-            product="Фото товара"
-        )
+        if message.caption:
+            product_text = message.caption.strip()
+
+        # Если это пересланный пост из канала,
+        # пытаемся автоматически восстановить ссылку
+        if message.forward_origin:
+
+            origin = message.forward_origin
+
+            if hasattr(origin, "chat") and hasattr(origin, "message_id"):
+
+                chat = origin.chat
+
+                if getattr(chat, "username", None):
+                    product_link = (
+                        f"https://t.me/{chat.username}/{origin.message_id}"
+                    )
+
+    # ---------------------------------
+    # Если клиент просто отправил ссылку
+    # ---------------------------------
 
     elif message.text:
 
-        await state.update_data(
-            product_type="text",
-            product=message.text
-        )
+        product_text = message.text.strip()
+
+        if "https://" in product_text or "http://" in product_text:
+            product_link = product_text
+
+    # ---------------------------------
+    # Ничего подходящего
+    # ---------------------------------
 
     else:
 
         await message.answer(
-            "Отправьте фото товара или ссылку на пост."
+            "Пожалуйста, пересылайте пост с товаром "
+            "из нашего Telegram-канала или отправьте ссылку на товар."
         )
+
         return
+
+    await state.update_data(
+        product_photo=product_photo,
+        product_text=product_text,
+        product_link=product_link,
+    )
 
     await state.set_state(Order.color)
 
     await message.answer(
-        "Укажите желаемый цвет."
+        "🎨 Укажите цвет товара."
     )
 
 
@@ -268,7 +252,7 @@ async def get_color(message: Message, state: FSMContext):
     await state.set_state(Order.size)
 
     await message.answer(
-        "Укажите размер."
+        "📏 Укажите размер."
     )
 
 
@@ -286,7 +270,7 @@ async def get_size(message: Message, state: FSMContext):
     await state.set_state(Order.quantity)
 
     await message.answer(
-        "Укажите количество."
+        "🔢 Укажите количество."
     )
 
 
@@ -301,194 +285,260 @@ async def get_quantity(message: Message, state: FSMContext):
         quantity=message.text
     )
 
-    # Автоматически определяем username
     user = message.from_user
 
-    telegram_username = (
-        f"@{user.username}"
-        if user.username
-        else "username не установлен"
-    )
+    if user.username:
+        username = f"@{user.username}"
+    else:
+        username = "username не установлен"
 
     await state.update_data(
-        telegram_username=telegram_username
+        full_name=user.full_name,
+        telegram_username=username,
+        telegram_id=user.id,
     )
 
     await state.set_state(Order.phone)
 
     await message.answer(
-        "Контактные данные\n\n"
-        f"Telegram: {telegram_username}\n\n"
-        "Теперь отправьте номер телефона.",
+        "📱 Номер телефона\n\n"
+        "Вы можете передать номер телефона для связи по заказу "
+        "или продолжить без него.",
         reply_markup=phone_keyboard
     )
 
 
 # =========================
-# НОМЕР ТЕЛЕФОНА
+# ТЕЛЕФОН — ОТПРАВИТЬ
 # =========================
 
-@dp.message(
-    Order.phone,
-    F.contact
-)
-async def get_phone(
-    message: Message,
-    state: FSMContext
-):
-
-    phone = message.contact.phone_number
+@dp.message(Order.phone, F.contact)
+async def get_phone(message: Message, state: FSMContext):
 
     await state.update_data(
-        phone=phone
+        phone=message.contact.phone_number
     )
 
-    await show_order_summary(
-        message,
-        state
-    )
-
-
-@dp.message(Order.phone)
-async def phone_required(message: Message):
-
-    await message.answer(
-        "Пожалуйста, нажмите кнопку «Отправить номер телефона»."
-    )
+    await show_summary(message, state)
 
 
 # =========================
-# ПРЕДПРОСМОТР ЗАКАЗА
+# ТЕЛЕФОН — НЕ ОТПРАВЛЯТЬ
 # =========================
 
-async def show_order_summary(
-    message: Message,
-    state: FSMContext
-):
+@dp.message(Order.phone, F.text == "Не отправлять номер телефона")
+async def skip_phone(message: Message, state: FSMContext):
+
+    await state.update_data(
+        phone="Не предоставлен"
+    )
+
+    await show_summary(message, state)
+
+
+# =========================
+# СВОДКА
+# =========================
+
+async def show_summary(message: Message, state: FSMContext):
 
     data = await state.get_data()
 
+    product_text = data.get("product_text") or "Описание отсутствует"
+    color = data.get("color")
+    size = data.get("size")
+    quantity = data.get("quantity")
+    phone = data.get("phone")
+    username = data.get("telegram_username")
+
     summary = (
-        "Проверьте данные заказа:\n\n"
-        f"Товар: {data['product']}\n"
-        f"Цвет: {data['color']}\n"
-        f"Размер: {data['size']}\n"
-        f"Количество: {data['quantity']}\n"
-        f"Telegram: {data['telegram_username']}\n"
-        f"Телефон: {data['phone']}\n\n"
-        "Если всё верно — напишите «Да».\n"
-        "Если нужно начать заново — напишите «Нет»."
+        "🛍️ Проверьте данные заказа\n\n"
+
+        f"Товар:\n{product_text}\n\n"
+        f"Цвет: {color}\n"
+        f"Размер: {size}\n"
+        f"Количество: {quantity}\n\n"
+
+        f"Telegram: {username}\n"
+        f"Телефон: {phone}\n\n"
+
+        "💳 Условия оплаты:\n"
+        "50% — предоплата при оформлении\n"
+        "50% — после получения товара\n\n"
+
+        "Всё верно?"
     )
+
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="Да, оформить заказ",
+        callback_data="confirm_order"
+    )
+
+    builder.button(
+        text="Нет, начать заново",
+        callback_data="cancel_order"
+    )
+
+    builder.adjust(1)
 
     await state.set_state(Order.confirm)
 
     await message.answer(
         summary,
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="Да")],
-                [KeyboardButton(text="Нет")]
-            ],
-            resize_keyboard=True
-        )
+        reply_markup=builder.as_markup()
     )
 
 
 # =========================
-# ПОДТВЕРЖДЕНИЕ ЗАКАЗА
+# ПОДТВЕРЖДЕНИЕ
 # =========================
 
-@dp.message(Order.confirm)
-async def confirm_order(
-    message: Message,
-    state: FSMContext
-):
-
-    answer = message.text.lower().strip()
-
-    if answer == "нет":
-
-        await state.clear()
-
-        await message.answer(
-            "Хорошо. Нажмите «Оформить заказ», чтобы начать заново.",
-            reply_markup=menu
-        )
-
-        return
-
-    if answer != "да":
-
-        await message.answer(
-            "Напишите «Да», если всё верно, "
-            "или «Нет», чтобы начать заново."
-        )
-
-        return
+@dp.callback_query(Order.confirm, F.data == "confirm_order")
+async def confirm_order(callback, state: FSMContext):
 
     data = await state.get_data()
 
-    user = message.from_user
+    product_photo = data.get("product_photo")
+    product_text = data.get("product_text") or "Описание отсутствует"
+    product_link = data.get("product_link")
+    color = data.get("color")
+    size = data.get("size")
+    quantity = data.get("quantity")
+    phone = data.get("phone")
+    username = data.get("telegram_username")
+    telegram_id = data.get("telegram_id")
+    full_name = data.get("full_name")
 
-    telegram_username = data.get(
-        "telegram_username",
-        "username не установлен"
-    )
-
-    phone = data.get(
-        "phone",
-        "не указан"
-    )
-
-    admin_message = (
-        "🛍 НОВЫЙ ЗАКАЗ — RUBY SHOP\n\n"
+    admin_text = (
+        "🔴 НОВЫЙ ЗАКАЗ — RUBY SHOP\n\n"
 
         "👤 КЛИЕНТ\n"
-        f"Имя: {user.full_name}\n"
-        f"Username Telegram: {telegram_username}\n"
-        f"Телефон: {phone}\n"
-        f"Telegram ID: {user.id}\n\n"
+        f"Имя: {full_name}\n"
+        f"Telegram: {username}\n"
+        f"Telegram ID: {telegram_id}\n"
+        f"Телефон: {phone}\n\n"
 
-        "📦 ЗАКАЗ\n"
-        f"Товар: {data['product']}\n"
-        f"Цвет: {data['color']}\n"
-        f"Размер: {data['size']}\n"
-        f"Количество: {data['quantity']}\n\n"
+        "🛍️ ТОВАР\n"
+        f"{product_text}\n\n"
 
-        "💳 УСЛОВИЯ\n"
+        f"🎨 Цвет: {color}\n"
+        f"📏 Размер: {size}\n"
+        f"🔢 Количество: {quantity}\n\n"
+
+        "💳 ОПЛАТА\n"
         "50% — предоплата\n"
-        "50% — после получения"
+        "50% — после получения\n"
+    )
+
+    if product_link:
+        admin_text += (
+            "\n🔗 Ссылка на товар:\n"
+            f"{product_link}\n"
+        )
+
+    # Отправляем тебе фото + текст товара
+    if product_photo:
+
+        await bot.send_photo(
+            chat_id=ADMIN_CHAT_ID,
+            photo=product_photo,
+            caption=admin_text
+        )
+
+    else:
+
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=admin_text
+        )
+
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
+    await callback.message.answer(
+        "✅ Заказ оформлен.\n\n"
+        "Мы получили ваш заказ и свяжемся с вами для подтверждения "
+        "наличия товара и дальнейшего оформления.\n\n"
+        "Ruby Shop",
+        reply_markup=main_keyboard
+    )
+
+    await state.clear()
+    await callback.answer()
+
+
+# =========================
+# НАЧАТЬ ЗАНОВО
+# =========================
+
+@dp.callback_query(Order.confirm, F.data == "cancel_order")
+async def cancel_order(callback, state: FSMContext):
+
+    await state.clear()
+
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
+    await callback.message.answer(
+        "Хорошо. Давайте оформим заказ заново.\n\n"
+        "Нажмите «Оформить заказ».",
+        reply_markup=main_keyboard
+    )
+
+    await callback.answer()
+
+
+# =========================
+# ВОПРОС
+# =========================
+
+@dp.message(F.text == "Задать вопрос")
+async def ask_question(message: Message, state: FSMContext):
+
+    await state.set_state(Question.waiting)
+
+    await message.answer(
+        "Напишите ваш вопрос одним сообщением.\n\n"
+        "Мы передадим его менеджеру Ruby Shop.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+@dp.message(Question.waiting)
+async def receive_question(message: Message, state: FSMContext):
+
+    user = message.from_user
+
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "username не установлен"
+    )
+
+    question_text = (
+        "💬 НОВЫЙ ВОПРОС — RUBY SHOP\n\n"
+        f"Имя: {user.full_name}\n"
+        f"Telegram: {username}\n"
+        f"Telegram ID: {user.id}\n\n"
+        f"Вопрос:\n{message.text}"
     )
 
     await bot.send_message(
         chat_id=ADMIN_CHAT_ID,
-        text=admin_message
+        text=question_text
     )
-
-    if data.get("product_type") == "photo":
-
-        await bot.send_photo(
-            chat_id=ADMIN_CHAT_ID,
-            photo=data["product_photo_id"],
-            caption="📸 Фото товара из заказа."
-        )
-
-    elif data.get("product_type") == "text":
-
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"🔗 Товар / ссылка:\n{data['product']}"
-        )
-
-    await state.clear()
 
     await message.answer(
-        "Заказ принят.\n\n"
-        "Мы проверим наличие товара и свяжемся с вами "
-        "для оформления предоплаты 50%.\n\n"
-        "Спасибо, что выбираете Ruby Shop.",
-        reply_markup=menu
+        "✅ Вопрос отправлен.\n"
+        "Мы свяжемся с вами, как только сможем.",
+        reply_markup=main_keyboard
     )
+
+    await state.clear()
 
 
 # =========================
