@@ -13,7 +13,6 @@ from aiogram.types import (
     CallbackQuery,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    ReplyKeyboardRemove,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
@@ -27,7 +26,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 
-# Telegram-канал Ruby Shop
 SHOP_CHANNEL_URL = "https://t.me/ruby_shop_dn"
 
 DB_FILE = "ruby_shop.db"
@@ -177,7 +175,6 @@ class Order(StatesGroup):
     quantity = State()
     phone = State()
     confirm = State()
-    editing = State()
 
 
 class Question(StatesGroup):
@@ -189,7 +186,6 @@ class Question(StatesGroup):
 # =========================================================
 
 def get_main_keyboard():
-
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -213,7 +209,6 @@ def get_main_keyboard():
 # =========================================================
 
 def back_menu_keyboard():
-
     builder = InlineKeyboardBuilder()
 
     builder.button(
@@ -251,7 +246,6 @@ phone_keyboard = ReplyKeyboardMarkup(
 # =========================================================
 
 def progress(step):
-
     symbols = []
 
     for i in range(5):
@@ -269,7 +263,6 @@ def progress(step):
 
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
-
     await state.clear()
 
     text = (
@@ -291,7 +284,6 @@ async def start(message: Message, state: FSMContext):
 
 @dp.message(F.text == "📋 Условия заказа")
 async def conditions(message: Message):
-
     text = (
         "📋 УСЛОВИЯ ЗАКАЗА\n\n"
 
@@ -337,7 +329,6 @@ async def conditions(message: Message):
 
 @dp.message(F.text == "✈️ Telegram-канал")
 async def telegram_channel(message: Message):
-
     builder = InlineKeyboardBuilder()
 
     builder.button(
@@ -359,7 +350,6 @@ async def telegram_channel(message: Message):
 
 @dp.message(F.text == "🛍️ Оформить заказ")
 async def start_order(message: Message, state: FSMContext):
-
     await state.clear()
     await state.set_state(Order.product)
 
@@ -382,7 +372,6 @@ async def start_order(message: Message, state: FSMContext):
 async def get_product(message: Message, state: FSMContext):
 
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
@@ -412,7 +401,6 @@ async def get_product(message: Message, state: FSMContext):
                 chat = origin.chat
 
                 if getattr(chat, "username", None):
-
                     product_link = (
                         f"https://t.me/"
                         f"{chat.username}/"
@@ -461,7 +449,6 @@ async def get_product(message: Message, state: FSMContext):
 async def get_color(message: Message, state: FSMContext):
 
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
@@ -494,7 +481,6 @@ async def get_color(message: Message, state: FSMContext):
 async def get_size(message: Message, state: FSMContext):
 
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
@@ -527,7 +513,6 @@ async def get_size(message: Message, state: FSMContext):
 async def get_quantity(message: Message, state: FSMContext):
 
     if message.text == "🏠 В меню":
-
         await state.clear()
 
         await message.answer(
@@ -540,7 +525,6 @@ async def get_quantity(message: Message, state: FSMContext):
     quantity = message.text.strip()
 
     if not quantity.isdigit() or int(quantity) <= 0:
-
         await message.answer(
             "⚠️ Укажите количество цифрами.\n\n"
             "Например: 1 или 2.",
@@ -659,11 +643,6 @@ async def show_summary(message: Message, state: FSMContext):
     )
 
     builder.button(
-        text="✏️ Изменить данные",
-        callback_data="edit_order"
-    )
-
-    builder.button(
         text="❌ Отменить",
         callback_data="cancel_order"
     )
@@ -699,7 +678,7 @@ async def back_to_menu(
 
 
 # =========================================================
-# ПОДТВЕРЖДЕНИЕ
+# ПОДТВЕРЖДЕНИЕ ЗАКАЗА
 # =========================================================
 
 @dp.callback_query(
@@ -748,7 +727,6 @@ async def confirm_order(
     )
 
     if product_link:
-
         admin_text += (
             "\n\n🔗 Ссылка на товар:\n"
             f"{product_link}"
@@ -784,22 +762,19 @@ async def confirm_order(
                 InlineKeyboardButton(
                     text="❌ Отменить заказ",
                     callback_data=f"status_cancelled:{order_id}"
-                ),
+                )
             ],
         ]
     )
 
     if product_photo:
-
         await bot.send_photo(
             chat_id=ADMIN_CHAT_ID,
             photo=product_photo,
             caption=admin_text,
             reply_markup=status_keyboard
         )
-
     else:
-
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=admin_text,
@@ -826,7 +801,7 @@ async def confirm_order(
 
 
 # =========================================================
-# ОТМЕНА
+# ОТМЕНА ЗАКАЗА КЛИЕНТОМ
 # =========================================================
 
 @dp.callback_query(
@@ -866,7 +841,6 @@ async def my_orders(message: Message):
     )
 
     if not orders:
-
         await message.answer(
             "📦 МОИ ЗАКАЗЫ\n\n"
             "У вас пока нет оформленных заказов.",
@@ -962,6 +936,10 @@ async def change_status(
     )
 
 
+# =========================================================
+# СТАТУС: ПОДТВЕРЖДЁН
+# =========================================================
+
 @dp.callback_query(
     F.data.startswith("status_confirmed:")
 )
@@ -977,3 +955,182 @@ async def status_confirmed(callback: CallbackQuery):
         "Подтверждён",
         "Подтверждён",
         "Ваш заказ подтверждён. Мы запускаем его в работу."
+    )
+
+
+# =========================================================
+# СТАТУС: ТОВАР В ПУТИ
+# =========================================================
+
+@dp.callback_query(
+    F.data.startswith("status_delivery:")
+)
+async def status_delivery(callback: CallbackQuery):
+
+    order_id = int(
+        callback.data.split(":")[1]
+    )
+
+    await change_status(
+        callback,
+        order_id,
+        "Товар в пути",
+        "Товар в пути",
+        "Ваш товар уже в пути к нам."
+    )
+
+
+# =========================================================
+# СТАТУС: ТОВАР В ДОНЕЦКЕ
+# =========================================================
+
+@dp.callback_query(
+    F.data.startswith("status_donetsk:")
+)
+async def status_donetsk(callback: CallbackQuery):
+
+    order_id = int(
+        callback.data.split(":")[1]
+    )
+
+    await change_status(
+        callback,
+        order_id,
+        "Товар в Донецке",
+        "Товар в Донецке",
+        "Ваш товар уже поступил в Донецк."
+    )
+
+
+# =========================================================
+# СТАТУС: ЗАКАЗ ПОЛУЧЕН
+# =========================================================
+
+@dp.callback_query(
+    F.data.startswith("status_received:")
+)
+async def status_received(callback: CallbackQuery):
+
+    order_id = int(
+        callback.data.split(":")[1]
+    )
+
+    await change_status(
+        callback,
+        order_id,
+        "Получен",
+        "Заказ получен",
+        "Ваш заказ отмечен как полученный."
+    )
+
+
+# =========================================================
+# СТАТУС: ОТМЕНЁН
+# =========================================================
+
+@dp.callback_query(
+    F.data.startswith("status_cancelled:")
+)
+async def status_cancelled(callback: CallbackQuery):
+
+    order_id = int(
+        callback.data.split(":")[1]
+    )
+
+    await change_status(
+        callback,
+        order_id,
+        "Отменён",
+        "Заказ отменён",
+        "Ваш заказ был отменён."
+    )
+
+
+# =========================================================
+# ЗАДАТЬ ВОПРОС
+# =========================================================
+
+@dp.message(F.text == "💬 Задать вопрос")
+async def ask_question(
+    message: Message,
+    state: FSMContext
+):
+
+    await state.set_state(
+        Question.waiting
+    )
+
+    await message.answer(
+        "💬 ВОПРОС\n\n"
+        "Напишите ваш вопрос одним сообщением.\n\n"
+        "Мы передадим его менеджеру Ruby Shop.",
+        reply_markup=get_main_keyboard()
+    )
+
+
+# =========================================================
+# ПОЛУЧИТЬ ВОПРОС
+# =========================================================
+
+@dp.message(Question.waiting)
+async def receive_question(
+    message: Message,
+    state: FSMContext
+):
+
+    if message.text == "🏠 В меню":
+
+        await state.clear()
+
+        await message.answer(
+            "🏠 Главное меню",
+            reply_markup=get_main_keyboard()
+        )
+
+        return
+
+    user = message.from_user
+
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "username не установлен"
+    )
+
+    question_text = (
+        "💬 НОВЫЙ ВОПРОС — RUBY SHOP\n\n"
+        f"Имя: {user.full_name}\n"
+        f"Telegram: {username}\n"
+        f"Telegram ID: {user.id}\n\n"
+        f"Вопрос:\n{message.text}"
+    )
+
+    await bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=question_text
+    )
+
+    await message.answer(
+        "✅ Вопрос отправлен.\n\n"
+        "Мы свяжемся с вами, как только сможем.",
+        reply_markup=get_main_keyboard()
+    )
+
+    await state.clear()
+
+
+# =========================================================
+# ЗАПУСК
+# =========================================================
+
+async def main():
+
+    init_db()
+
+    logging.info("Ruby Shop bot запускается...")
+
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
