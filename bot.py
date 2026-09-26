@@ -205,7 +205,7 @@ def get_main_keyboard():
 
 
 # =========================================================
-# КНОПКА В МЕНЮ
+# КНОПКА "В МЕНЮ"
 # =========================================================
 
 def back_menu_keyboard():
@@ -1120,6 +1120,125 @@ async def receive_question(
 
 
 # =========================================================
+# ДОБАВЛЕНИЕ КНОПКИ К ГОТОВОМУ ПОСТУ
+# =========================================================
+
+def parse_channel_post_link(link: str):
+    """
+    Принимает ссылку вида:
+
+    https://t.me/ruby_shop_dn/255
+
+    Возвращает:
+    ("@ruby_shop_dn", 255)
+    """
+
+    link = link.strip().rstrip("/")
+
+    if not link.startswith("https://t.me/"):
+        return None
+
+    parts = link.split("/")
+
+    if len(parts) < 5:
+        return None
+
+    username = parts[3]
+    message_id = parts[4]
+
+    if not message_id.isdigit():
+        return None
+
+    return f"@{username}", int(message_id)
+
+
+@dp.message(F.text.startswith("https://t.me/"))
+async def add_order_button(message: Message):
+
+    # Только администратор может использовать эту функцию
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    parsed = parse_channel_post_link(message.text)
+
+    if not parsed:
+        await message.answer(
+            "❌ Не удалось распознать ссылку.\n\n"
+            "Отправьте ссылку такого вида:\n"
+            "https://t.me/ruby_shop_dn/255"
+        )
+        return
+
+    channel_username, message_id = parsed
+
+    # Защита: работаем только с Ruby Shop
+    if channel_username.lower() != "@ruby_shop_dn":
+
+        await message.answer(
+            "❌ Эта функция работает только "
+            "с каналом Ruby Shop."
+        )
+
+        return
+
+    try:
+
+        # Получаем информацию о нашем боте
+        me = await bot.get_me()
+
+        if not me.username:
+
+            await message.answer(
+                "❌ У бота не установлен username."
+            )
+
+            return
+
+        # Ссылка на бота
+        bot_link = f"https://t.me/{me.username}"
+
+        # Кнопка "Заказать"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🛍️ Заказать",
+                        url=bot_link
+                    )
+                ]
+            ]
+        )
+
+        # Добавляем кнопку к существующему посту
+        await bot.edit_message_reply_markup(
+            chat_id=channel_username,
+            message_id=message_id,
+            reply_markup=keyboard
+        )
+
+        await message.answer(
+            "✅ ГОТОВО!\n\n"
+            f"К посту №{message_id} добавлена кнопка:\n\n"
+            "🛍️ Заказать\n\n"
+            f"Кнопка ведёт в @{me.username}."
+        )
+
+    except Exception as error:
+
+        logging.error(
+            f"Ошибка добавления кнопки к посту: {error}"
+        )
+
+        await message.answer(
+            "❌ Не удалось добавить кнопку.\n\n"
+            "Проверьте, что бот является "
+            "администратором канала и имеет право "
+            "«Изменение сообщений».\n\n"
+            f"Техническая ошибка:\n{error}"
+        )
+
+
+# =========================================================
 # ЗАПУСК
 # =========================================================
 
@@ -1127,7 +1246,9 @@ async def main():
 
     init_db()
 
-    logging.info("Ruby Shop bot запускается...")
+    logging.info(
+        "Ruby Shop bot запускается..."
+    )
 
     await dp.start_polling(bot)
 
