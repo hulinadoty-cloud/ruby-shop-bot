@@ -15,6 +15,7 @@ from aiogram.types import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    InputMediaPhoto,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -183,8 +184,19 @@ class Question(StatesGroup):
 
 
 class Admin(StatesGroup):
-    waiting_existing_post = State()
-    waiting_new_post = State()
+    waiting_new_album = State()
+
+
+# ============================================================
+# ALBUM STORAGE
+# ============================================================
+
+# Здесь временно собираются фотографии альбома.
+# Ключ = media_group_id
+album_buffer = {}
+
+# Таймеры ожидания альбомов
+album_tasks = {}
 
 
 # ============================================================
@@ -252,19 +264,14 @@ def progress(step):
 
 
 # ============================================================
-# ADMIN KEYBOARD
+# ADMIN PANEL
 # ============================================================
 
 def get_admin_keyboard():
     builder = InlineKeyboardBuilder()
 
     builder.button(
-        text="➕ Добавить кнопку к посту",
-        callback_data="admin_add_button"
-    )
-
-    builder.button(
-        text="📤 Опубликовать новый товар",
+        text="📤 Опубликовать товар",
         callback_data="admin_publish"
     )
 
@@ -276,6 +283,318 @@ def get_admin_keyboard():
     builder.adjust(1)
 
     return builder.as_markup()
+
+
+@dp.message(Command("channel"))
+async def admin_channel(
+    message: Message,
+    state: FSMContext
+):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        await message.answer("Команда недоступна.")
+        return
+
+    await state.clear()
+
+    await message.answer(
+        "🔐 УПРАВЛЕНИЕ RUBY SHOP\n\n"
+        "Здесь ты можешь публиковать товары "
+        "в Telegram-канал.\n\n"
+        "📤 Опубликовать товар\n"
+        "Отправь альбом из 2–10 фотографий "
+        "с описанием. Бот соберёт фотографии "
+        "в один альбом и добавит кнопку "
+        "«🛍️ Заказать».",
+        reply_markup=get_admin_keyboard()
+    )
+
+
+@dp.callback_query(F.data == "admin_close")
+async def admin_close(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+    if callback.from_user.id != ADMIN_CHAT_ID:
+        await callback.answer(
+            "Недостаточно прав.",
+            show_alert=True
+        )
+        return
+
+    await state.clear()
+
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
+    await callback.message.answer(
+        "🔐 Управление каналом закрыто.",
+        reply_markup=get_main_keyboard()
+    )
+
+    await callback.answer()
+
+
+# ============================================================
+# ADMIN — PUBLISH
+# ============================================================
+
+@dp.callback_query(F.data == "admin_publish")
+async def admin_publish(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+    if callback.from_user.id != ADMIN_CHAT_ID:
+        await callback.answer(
+            "Недостаточно прав.",
+            show_alert=True
+        )
+        return
+
+    await state.clear()
+    await state.set_state(Admin.waiting_new_album)
+
+    await callback.message.answer(
+        "📤 ПУБЛИКАЦИЯ ТОВАРА\n\n"
+        "Отправь сюда альбом из фотографий.\n\n"
+        "Можно от 2 до 10 фотографий.\n\n"
+        "В подписи к первой фотографии "
+        "напиши описание товара, например:\n\n"
+        "NIKE TECH FLEECE\n"
+        "Размеры: S–XL\n"
+        "Цвет: Black\n"
+        "Качество: Premium\n\n"
+        "Бот соберёт фотографии в один альбом "
+        "и добавит кнопку:\n\n"
+        "🛍️ Заказать",
+        reply_markup=back_menu_keyboard()
+    )
+
+    await callback.answer()
+
+
+# ============================================================
+# ALBUM RECEIVING
+# ============================================================
+
+@dp.message(
+    Admin.waiting_new_album,
+    F.media_group_id
+)
+async def receive_album_photo(
+    message: Message,
+    state: FSMContext
+):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    if not message.photo:
+        return
+
+    media_group_id = message.media_group_id
+
+    if media_group_id not in album_buffer:
+        album_buffer[media_group_id] = {
+            "photos": [],
+            "caption": None,
+            "chat_id": message.chat.id,
+        }
+
+    album_buffer[media_group_id]["photos"].append(
+        message.photo[-1].file_id
+    )
+
+    # Берём caption с той фотографии,
+    # где он присутствует.
+    if message.caption:
+        album_buffer[media_group_id]["caption"] = (
+            message.caption
+        )
+
+    # Отменяем старый таймер.
+    old_task = album_tasks.get(media_group_id)
+
+    if old_task:
+        old_task.cancel()
+
+    # Ждём ещё немного, чтобы Telegram успел
+    # прислать остальные фотографии альбома.
+    album_tasks[media_group_id] = asyncio.create_task(
+        finish_album_after_delay(
+            media_group_id,
+            state
+        )
+    )
+
+
+async def finish_album_after_delay(
+    media_group_id,
+    state: FSMContext
+):
+    try:
+        # Даём Telegram время прислать весь альбом.
+        await asyncio.sleep(1.5)
+
+        album = album_buffer.get(media_group_id)
+
+        if not album:
+            return
+
+        photos = album["photos"]
+        caption = album["caption"]
+
+        # Telegram поддерживает максимум 10 элементов
+        # в одной медиагруппе.
+        photos = photos[:10]
+
+        if len(photos) < 2:
+            # Если вдруг пришла только одна фотография,
+            # ждём ещё немного.
+            await asyncio.sleep(1)
+
+            album = album_buffer.get(media_group_id)
+
+            if not album:
+                return
+
+            photos = album["photos"][:10]
+            caption = album["caption"]
+
+        if len(photos) < 2:
+            await bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=(
+                    "⚠️ Я получил только одну фотографию.\n\n"
+                    "Для публикации товара отправь "
+                    "альбом минимум из 2 фотографий."
+                )
+            )
+
+            album_buffer.pop(media_group_id, None)
+            album_tasks.pop(media_group_id, None)
+
+            return
+
+        # ----------------------------------------------------
+        # Создаём медиагруппу
+        # ----------------------------------------------------
+
+        media = []
+
+        for index, photo_id in enumerate(photos):
+
+            # Подпись ставим только на первую фотографию.
+            if index == 0 and caption:
+
+                media.append(
+                    InputMediaPhoto(
+                        media=photo_id,
+                        caption=caption
+                    )
+                )
+
+            else:
+
+                media.append(
+                    InputMediaPhoto(
+                        media=photo_id
+                    )
+                )
+
+        # ----------------------------------------------------
+        # Публикуем альбом в канал
+        # ----------------------------------------------------
+
+        sent_messages = await bot.send_media_group(
+            chat_id=SHOP_CHANNEL,
+            media=media
+        )
+
+        # ----------------------------------------------------
+        # Добавляем кнопку к последнему сообщению альбома
+        # ----------------------------------------------------
+
+        keyboard = await get_order_button()
+
+        last_message = sent_messages[-1]
+
+        await bot.edit_message_reply_markup(
+            chat_id=SHOP_CHANNEL,
+            message_id=last_message.message_id,
+            reply_markup=keyboard
+        )
+
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                "✅ ТОВАР ОПУБЛИКОВАН\n\n"
+                f"📸 Фотографий: {len(photos)}\n\n"
+                "📢 Альбом опубликован в канале.\n\n"
+                "🛍️ Кнопка «Заказать» добавлена."
+            ),
+            reply_markup=get_main_keyboard()
+        )
+
+        await state.clear()
+
+        # Очищаем временные данные.
+        album_buffer.pop(media_group_id, None)
+        album_tasks.pop(media_group_id, None)
+
+    except asyncio.CancelledError:
+        # Таймер был перезапущен — это нормально.
+        return
+
+    except Exception as error:
+        logging.exception(
+            "Ошибка публикации альбома"
+        )
+
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                "❌ Не удалось опубликовать альбом.\n\n"
+                "Проверь, что бот является администратором "
+                "канала и имеет право публиковать сообщения.\n\n"
+                f"Техническая ошибка:\n{error}"
+            )
+        )
+
+        album_buffer.pop(media_group_id, None)
+        album_tasks.pop(media_group_id, None)
+
+
+# ============================================================
+# FALLBACK FOR NON-ALBUM ADMIN MESSAGE
+# ============================================================
+
+@dp.message(Admin.waiting_new_album)
+async def admin_waiting_album_other(
+    message: Message,
+    state: FSMContext
+):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    if message.text == "🏠 В меню":
+
+        await state.clear()
+
+        await message.answer(
+            "🏠 Главное меню",
+            reply_markup=get_main_keyboard()
+        )
+
+        return
+
+    await message.answer(
+        "⚠️ Отправь именно альбом из фотографий.\n\n"
+        "От 2 до 10 фотографий одним сообщением "
+        "Telegram.\n\n"
+        "Текст товара добавь в подпись "
+        "к первой фотографии.",
+        reply_markup=back_menu_keyboard()
+    )
 
 
 # ============================================================
@@ -309,7 +628,10 @@ async def get_order_button():
 # ============================================================
 
 @dp.message(CommandStart())
-async def start(message: Message, state: FSMContext):
+async def start(
+    message: Message,
+    state: FSMContext
+):
     await state.clear()
 
     text = (
@@ -326,371 +648,24 @@ async def start(message: Message, state: FSMContext):
 
 
 # ============================================================
-# ADMIN CHANNEL PANEL
-# ============================================================
-
-@dp.message(Command("channel"))
-async def admin_channel(message: Message, state: FSMContext):
-
-    if message.from_user.id != ADMIN_CHAT_ID:
-        await message.answer(
-            "Команда недоступна."
-        )
-        return
-
-    await state.clear()
-
-    await message.answer(
-        "🔐 УПРАВЛЕНИЕ RUBY SHOP\n\n"
-        "Здесь ты можешь управлять товарами в Telegram-канале.\n\n"
-        "➕ Добавить кнопку к посту — "
-        "перешли сюда уже существующий пост из канала.\n\n"
-        "📤 Опубликовать новый товар — "
-        "отправь фото, текст или другое сообщение, "
-        "и бот разместит его в канале с кнопкой.",
-        reply_markup=get_admin_keyboard()
-    )
-
-
-@dp.callback_query(F.data == "admin_close")
-async def admin_close(
-    callback: CallbackQuery,
-    state: FSMContext
-):
-    if callback.from_user.id != ADMIN_CHAT_ID:
-        await callback.answer(
-            "Недостаточно прав.",
-            show_alert=True
-        )
-        return
-
-    await state.clear()
-
-    await callback.message.edit_reply_markup(
-        reply_markup=None
-    )
-
-    await callback.message.answer(
-        "🔐 Управление каналом закрыто.",
-        reply_markup=get_main_keyboard()
-    )
-
-    await callback.answer()
-
-
-# ============================================================
-# ADMIN — ADD BUTTON TO EXISTING POST
-# ============================================================
-
-@dp.callback_query(F.data == "admin_add_button")
-async def admin_add_button(
-    callback: CallbackQuery,
-    state: FSMContext
-):
-    if callback.from_user.id != ADMIN_CHAT_ID:
-        await callback.answer(
-            "Недостаточно прав.",
-            show_alert=True
-        )
-        return
-
-    await state.clear()
-    await state.set_state(Admin.waiting_existing_post)
-
-    await callback.message.answer(
-        "➕ ДОБАВЛЕНИЕ КНОПКИ\n\n"
-        "Теперь просто пересылай сюда пост "
-        "из канала Ruby Shop.\n\n"
-        "Бот определит оригинальный пост "
-        "и добавит под ним кнопку:\n\n"
-        "🛍️ Заказать\n\n"
-        "Важно: пересылай именно пост из канала, "
-        "а не скриншот.",
-        reply_markup=back_menu_keyboard()
-    )
-
-    await callback.answer()
-
-
-@dp.message(Admin.waiting_existing_post)
-async def process_existing_post(
-    message: Message,
-    state: FSMContext
-):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-
-    # --------------------------------------------------------
-    # Возврат в меню
-    # --------------------------------------------------------
-
-    if message.text == "🏠 В меню":
-        await state.clear()
-
-        await message.answer(
-            "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # Вариант 1: пользователь переслал пост
-    # --------------------------------------------------------
-
-    if message.forward_origin:
-
-        origin = message.forward_origin
-
-        try:
-            origin_chat = origin.chat
-            origin_message_id = origin.message_id
-        except AttributeError:
-            await message.answer(
-                "❌ Не удалось определить оригинальный пост.\n\n"
-                "Попробуй переслать пост из канала ещё раз."
-            )
-            return
-
-        try:
-            channel_chat = await bot.get_chat(
-                SHOP_CHANNEL
-            )
-
-            # Проверяем, что пост действительно из нашего канала
-            if origin_chat.id != channel_chat.id:
-                await message.answer(
-                    "❌ Этот пост не из канала Ruby Shop.\n\n"
-                    "Перешли пост именно из:\n"
-                    "@ruby_shop_dn"
-                )
-                return
-
-            keyboard = await get_order_button()
-
-            await bot.edit_message_reply_markup(
-                chat_id=channel_chat.id,
-                message_id=origin_message_id,
-                reply_markup=keyboard
-            )
-
-            await state.clear()
-
-            await message.answer(
-                "✅ ГОТОВО!\n\n"
-                f"К посту №{origin_message_id} "
-                "добавлена кнопка:\n\n"
-                "🛍️ Заказать\n\n"
-                "Теперь кнопку увидят подписчики канала.",
-                reply_markup=get_main_keyboard()
-            )
-
-            return
-
-        except Exception as error:
-            logging.exception(
-                "Ошибка добавления кнопки к существующему посту"
-            )
-
-            await message.answer(
-                "❌ Не удалось изменить пост.\n\n"
-                "Проверь, что бот является администратором "
-                "канала Ruby Shop и имеет право "
-                "«Изменение сообщений».\n\n"
-                f"Техническая ошибка:\n{error}"
-            )
-
-            return
-
-    # --------------------------------------------------------
-    # Вариант 2: пользователь отправил ссылку
-    # --------------------------------------------------------
-
-    if message.text and message.text.startswith(
-        "https://t.me/"
-    ):
-
-        parsed = parse_channel_post_link(
-            message.text
-        )
-
-        if not parsed:
-            await message.answer(
-                "❌ Не удалось распознать ссылку.\n\n"
-                "Пример:\n"
-                "https://t.me/ruby_shop_dn/255"
-            )
-            return
-
-        channel_username, message_id = parsed
-
-        if channel_username.lower() != "@ruby_shop_dn":
-            await message.answer(
-                "❌ Эта функция работает только "
-                "с каналом Ruby Shop."
-            )
-            return
-
-        try:
-            keyboard = await get_order_button()
-
-            await bot.edit_message_reply_markup(
-                chat_id=SHOP_CHANNEL,
-                message_id=message_id,
-                reply_markup=keyboard
-            )
-
-            await state.clear()
-
-            await message.answer(
-                "✅ ГОТОВО!\n\n"
-                f"К посту №{message_id} "
-                "добавлена кнопка:\n\n"
-                "🛍️ Заказать",
-                reply_markup=get_main_keyboard()
-            )
-
-        except Exception as error:
-            logging.exception(
-                "Ошибка изменения поста по ссылке"
-            )
-
-            await message.answer(
-                "❌ Не удалось изменить пост.\n\n"
-                "Проверь права бота администратора "
-                "в канале.\n\n"
-                f"Техническая ошибка:\n{error}"
-            )
-
-        return
-
-    # --------------------------------------------------------
-    # Всё остальное
-    # --------------------------------------------------------
-
-    await message.answer(
-        "⚠️ Я ожидаю пост из канала.\n\n"
-        "Перешли сюда готовый пост из "
-        "Ruby Shop или отправь ссылку на него.",
-        reply_markup=back_menu_keyboard()
-    )
-
-
-# ============================================================
-# ADMIN — PUBLISH NEW POST
-# ============================================================
-
-@dp.callback_query(F.data == "admin_publish")
-async def admin_publish(
-    callback: CallbackQuery,
-    state: FSMContext
-):
-    if callback.from_user.id != ADMIN_CHAT_ID:
-        await callback.answer(
-            "Недостаточно прав.",
-            show_alert=True
-        )
-        return
-
-    await state.clear()
-    await state.set_state(Admin.waiting_new_post)
-
-    await callback.message.answer(
-        "📤 ПУБЛИКАЦИЯ НОВОГО ТОВАРА\n\n"
-        "Теперь отправь сюда сообщение, "
-        "которое нужно разместить в канале.\n\n"
-        "Можно отправить:\n"
-        "• фото + описание\n"
-        "• обычный текст\n"
-        "• видео\n"
-        "• документ\n"
-        "• другое поддерживаемое сообщение\n\n"
-        "Бот скопирует его в канал "
-        "и автоматически добавит кнопку:\n\n"
-        "🛍️ Заказать",
-        reply_markup=back_menu_keyboard()
-    )
-
-    await callback.answer()
-
-
-@dp.message(Admin.waiting_new_post)
-async def publish_new_post(
-    message: Message,
-    state: FSMContext
-):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-
-    if message.text == "🏠 В меню":
-        await state.clear()
-
-        await message.answer(
-            "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
-        )
-
-        return
-
-    try:
-        keyboard = await get_order_button()
-
-        # Копируем абсолютно любой тип сообщения,
-        # который Telegram позволяет копировать.
-        result = await bot.copy_message(
-            chat_id=SHOP_CHANNEL,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-            reply_markup=keyboard
-        )
-
-        await state.clear()
-
-        await message.answer(
-            "✅ ТОВАР ОПУБЛИКОВАН\n\n"
-            "Пост отправлен в канал Ruby Shop.\n\n"
-            "🛍️ Кнопка «Заказать» уже добавлена.",
-            reply_markup=get_main_keyboard()
-        )
-
-        logging.info(
-            f"Новый пост опубликован в канале. "
-            f"Message ID: {result.message_id}"
-        )
-
-    except Exception as error:
-        logging.exception(
-            "Ошибка публикации нового поста"
-        )
-
-        await message.answer(
-            "❌ Не удалось опубликовать пост.\n\n"
-            "Проверь, что бот является администратором "
-            "канала и имеет право публиковать сообщения.\n\n"
-            f"Техническая ошибка:\n{error}"
-        )
-
-
-# ============================================================
 # CONDITIONS
 # ============================================================
 
 @dp.message(F.text == "📋 Условия заказа")
 async def conditions(message: Message):
+
     text = (
         "📋 УСЛОВИЯ ЗАКАЗА\n\n"
         "🛍️ Выбор товара\n"
         "Выбираете понравившийся товар и оформляете заказ "
-        "прямо в боте Ruby Shop. Бот последовательно запросит "
-        "необходимые данные и сформирует ваш заказ.\n\n"
+        "прямо в боте Ruby Shop.\n\n"
         "🔗 Ссылка на товар\n"
         "При оформлении заказа можно переслать сообщение "
         "с товаром из нашего Telegram-канала или отправить "
         "ссылку на конкретный товар.\n\n"
         "💳 Предоплата\n"
         "Для подтверждения заказа вносится предоплата — "
-        "50% от стоимости товара. После подтверждения "
-        "мы запускаем заказ в работу.\n\n"
+        "50% от стоимости товара.\n\n"
         "📦 Доставка\n"
         "Товар поступает к нам в Донецк в течение 5–10 дней.\n"
         "Срок является ориентировочным и может немного изменяться.\n\n"
@@ -710,11 +685,12 @@ async def conditions(message: Message):
 
 
 # ============================================================
-# TELEGRAM CHANNEL
+# CHANNEL
 # ============================================================
 
 @dp.message(F.text == "✈️ Telegram-канал")
 async def telegram_channel(message: Message):
+
     builder = InlineKeyboardBuilder()
 
     builder.button(
@@ -731,7 +707,7 @@ async def telegram_channel(message: Message):
 
 
 # ============================================================
-# ORDER — START
+# ORDER START
 # ============================================================
 
 @dp.message(F.text == "🛍️ Оформить заказ")
@@ -755,7 +731,7 @@ async def start_order(
 
 
 # ============================================================
-# ORDER — PRODUCT
+# ORDER PRODUCT
 # ============================================================
 
 @dp.message(Order.product)
@@ -764,6 +740,7 @@ async def get_product(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
+
         await state.clear()
 
         await message.answer(
@@ -777,7 +754,6 @@ async def get_product(
     product_text = None
     product_link = None
 
-    # Фото
     if message.photo:
 
         product_photo = message.photo[-1].file_id
@@ -787,9 +763,8 @@ async def get_product(
 
         if message.forward_origin:
 
-            origin = message.forward_origin
-
             try:
+                origin = message.forward_origin
                 chat = origin.chat
                 message_id = origin.message_id
 
@@ -803,7 +778,6 @@ async def get_product(
             except Exception:
                 pass
 
-    # Текст
     elif message.text:
 
         product_text = message.text.strip()
@@ -842,7 +816,7 @@ async def get_product(
 
 
 # ============================================================
-# ORDER — COLOR
+# COLOR
 # ============================================================
 
 @dp.message(Order.color)
@@ -851,6 +825,7 @@ async def get_color(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
+
         await state.clear()
 
         await message.answer(
@@ -876,7 +851,7 @@ async def get_color(
 
 
 # ============================================================
-# ORDER — SIZE
+# SIZE
 # ============================================================
 
 @dp.message(Order.size)
@@ -885,6 +860,7 @@ async def get_size(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
+
         await state.clear()
 
         await message.answer(
@@ -910,7 +886,7 @@ async def get_size(
 
 
 # ============================================================
-# ORDER — QUANTITY
+# QUANTITY
 # ============================================================
 
 @dp.message(Order.quantity)
@@ -919,6 +895,7 @@ async def get_quantity(
     state: FSMContext
 ):
     if message.text == "🏠 В меню":
+
         await state.clear()
 
         await message.answer(
@@ -968,7 +945,7 @@ async def get_quantity(
 
 
 # ============================================================
-# ORDER — PHONE
+# PHONE
 # ============================================================
 
 @dp.message(Order.phone, F.contact)
@@ -1005,7 +982,7 @@ async def skip_phone(
 
 
 # ============================================================
-# ORDER — SUMMARY
+# SUMMARY
 # ============================================================
 
 async def show_summary(
@@ -1060,7 +1037,7 @@ async def show_summary(
 
 
 # ============================================================
-# BACK TO MENU
+# BACK
 # ============================================================
 
 @dp.callback_query(F.data == "back_to_menu")
@@ -1079,7 +1056,7 @@ async def back_to_menu(
 
 
 # ============================================================
-# ORDER — CONFIRM
+# CONFIRM ORDER
 # ============================================================
 
 @dp.callback_query(
@@ -1156,7 +1133,7 @@ async def confirm_order(
                     callback_data=(
                         f"status_donetsk:{order_id}"
                     )
-                )
+                ]
             ],
             [
                 InlineKeyboardButton(
@@ -1215,7 +1192,7 @@ async def confirm_order(
 
 
 # ============================================================
-# ORDER — CANCEL
+# CANCEL ORDER
 # ============================================================
 
 @dp.callback_query(
@@ -1291,7 +1268,7 @@ async def my_orders(message: Message):
 
 
 # ============================================================
-# ORDER STATUS
+# STATUS CHANGE
 # ============================================================
 
 async def change_status(
@@ -1455,7 +1432,6 @@ async def ask_question(
     message: Message,
     state: FSMContext
 ):
-
     await state.set_state(
         Question.waiting
     )
@@ -1473,7 +1449,6 @@ async def receive_question(
     message: Message,
     state: FSMContext
 ):
-
     if message.text == "🏠 В меню":
 
         await state.clear()
@@ -1513,98 +1488,6 @@ async def receive_question(
     )
 
     await state.clear()
-
-
-# ============================================================
-# CHANNEL LINK PARSER
-# ============================================================
-
-def parse_channel_post_link(link: str):
-
-    link = link.strip().rstrip("/")
-
-    if not link.startswith("https://t.me/"):
-        return None
-
-    parts = link.split("/")
-
-    if len(parts) < 5:
-        return None
-
-    username = parts[3]
-    message_id = parts[4]
-
-    if not message_id.isdigit():
-        return None
-
-    return f"@{username}", int(message_id)
-
-
-# ============================================================
-# FALLBACK: ADMIN SENDS CHANNEL LINK
-# ============================================================
-
-@dp.message(F.text.startswith("https://t.me/"))
-async def add_order_button_by_link(
-    message: Message
-):
-
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-
-    parsed = parse_channel_post_link(
-        message.text
-    )
-
-    if not parsed:
-
-        await message.answer(
-            "❌ Не удалось распознать ссылку.\n\n"
-            "Отправьте ссылку такого вида:\n"
-            "https://t.me/ruby_shop_dn/255"
-        )
-
-        return
-
-    channel_username, message_id = parsed
-
-    if channel_username.lower() != "@ruby_shop_dn":
-
-        await message.answer(
-            "❌ Эта функция работает только "
-            "с каналом Ruby Shop."
-        )
-
-        return
-
-    try:
-
-        keyboard = await get_order_button()
-
-        await bot.edit_message_reply_markup(
-            chat_id=SHOP_CHANNEL,
-            message_id=message_id,
-            reply_markup=keyboard
-        )
-
-        await message.answer(
-            "✅ ГОТОВО!\n\n"
-            f"К посту №{message_id} добавлена кнопка:\n\n"
-            "🛍️ Заказать"
-        )
-
-    except Exception as error:
-
-        logging.exception(
-            "Ошибка добавления кнопки по ссылке"
-        )
-
-        await message.answer(
-            "❌ Не удалось добавить кнопку.\n\n"
-            "Проверьте, что бот является администратором "
-            "канала и имеет право «Изменение сообщений».\n\n"
-            f"Техническая ошибка:\n{error}"
-        )
 
 
 # ============================================================
